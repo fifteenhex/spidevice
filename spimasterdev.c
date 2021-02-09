@@ -5,6 +5,7 @@
 #include <linux/kernel.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
+#include <linux/spi/spi.h>
 
 #define DEV_NAME "spimasterdev"
 #define MAX_DEV 2
@@ -15,7 +16,6 @@ struct spimasterdev {
 
 static int dev_major = 0;
 static struct class *dev_class = NULL;
-static struct spimasterdev devs[MAX_DEV];
 
 static int spimasterdev_open(struct inode *inode, struct file *file)
 {
@@ -62,6 +62,8 @@ static int __init spimasterdev_init(void)
 	int ret, i;
 	dev_t dev;
 	struct device *device;
+	struct spi_master *master;
+	struct spimasterdev *spimasterdev;
 
 	ret = alloc_chrdev_region(&dev, 0, MAX_DEV, DEV_NAME);
 	if (ret)
@@ -78,17 +80,24 @@ static int __init spimasterdev_init(void)
 	dev_class->dev_uevent = spimasterdev_uevent;
 
 	for (i = 0; i < MAX_DEV; i++) {
-		cdev_init(&devs[i].cdev, &spimasterdev_fops);
-		devs[i].cdev.owner = THIS_MODULE;
-		ret = cdev_add(&devs[i].cdev, MKDEV(dev_major, i), 1);
-		if (ret)
-			goto unregister_devs;
-
 		device = device_create(dev_class, NULL, MKDEV(dev_major, i), NULL, DEV_NAME"-%d", i);
 		if (IS_ERR(device)) {
 			ret = PTR_ERR(device);
 			goto unregister_devs;
 		}
+
+		master = spi_alloc_master(device, sizeof(struct spimasterdev));
+		if (!master) {
+			ret = -ENOMEM;
+			goto unregister_devs;
+		}
+
+		spimasterdev = spi_master_get_devdata(master);
+		cdev_init(&spimasterdev->cdev, &spimasterdev_fops);
+		spimasterdev->cdev.owner = THIS_MODULE;
+		ret = cdev_add(&spimasterdev->cdev, MKDEV(dev_major, i), 1);
+		if (ret)
+			goto unregister_devs;
 	}
 
 	return 0;

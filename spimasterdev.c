@@ -17,6 +17,28 @@ struct spimasterdev {
 static int dev_major = 0;
 static struct class *dev_class = NULL;
 
+static ssize_t spimaster_new_device_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t size)
+{
+	struct spi_master *spimaster = dev_get_drvdata(dev);
+	struct spimasterdev *spimasterdev = spi_master_get_devdata(spimaster);
+
+	struct spi_board_info new_device_info = {
+		.modalias = "m25p128",
+		.max_speed_hz = 11000000,
+		.chip_select = 0,
+		.mode = SPI_MODE_0,
+		.platform_data = NULL,
+	};
+
+	spi_new_device(spimaster, &new_device_info);
+
+	return size;
+}
+
+static DEVICE_ATTR(new_device, S_IWUSR, NULL, spimaster_new_device_store);
+
 static int spimasterdev_open(struct inode *inode, struct file *file)
 {
 	return 0;
@@ -57,6 +79,22 @@ static int spimasterdev_uevent(struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 
+static int spimasterdev_spi_setup(struct spi_device *spi)
+{
+	return 0;
+}
+
+static int spimasterdev_spi_transfer_one(struct spi_controller *ctlr, struct spi_device *spi,
+					 struct spi_transfer *transfer)
+{
+	return 0;
+}
+
+static void spimasterdev_set_cs(struct spi_device *spi, bool enable)
+{
+
+}
+
 static int __init spimasterdev_init(void)
 {
 	int ret, i;
@@ -86,16 +124,31 @@ static int __init spimasterdev_init(void)
 			goto unregister_devs;
 		}
 
+		device_create_file(device, &dev_attr_new_device);
+
 		master = spi_alloc_master(device, sizeof(struct spimasterdev));
 		if (!master) {
 			ret = -ENOMEM;
 			goto unregister_devs;
 		}
+		dev_set_drvdata(device, master);
 
 		spimasterdev = spi_master_get_devdata(master);
 		cdev_init(&spimasterdev->cdev, &spimasterdev_fops);
 		spimasterdev->cdev.owner = THIS_MODULE;
 		ret = cdev_add(&spimasterdev->cdev, MKDEV(dev_major, i), 1);
+		if (ret)
+			goto unregister_devs;
+
+		master->bus_num = -1;
+		master->num_chipselect = 1;
+		master->mode_bits = SPI_CPHA | SPI_CPOL;
+		master->flags = SPI_CONTROLLER_HALF_DUPLEX;
+		master->setup = spimasterdev_spi_setup;
+		master->transfer_one = spimasterdev_spi_transfer_one;
+		master->set_cs = spimasterdev_set_cs;
+
+		ret = devm_spi_register_master(device, master);
 		if (ret)
 			goto unregister_devs;
 	}
